@@ -1,0 +1,13 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "c:\\users\\maxse\\documents\\unreal projects\\mountains\\intermediate\\build\\win64\\unrealeditor\\inc\\mountains\\uht\\mountains.init.gen.cpp",
+        "ProvidedModule": "",
+        "PCH": "c:\\users\\maxse\\documents\\unreal projects\\mountains\\intermediate\\build\\win64\\x64\\mountainseditor\\development\\unrealed\\sharedpch.unrealed.project.valapi.cpp20.h.pch",
+        "Includes": [
+            "c:\\users\\maxse\\documents\\unreal projects\\mountains\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\mountains\\definitions.mountains.h"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}

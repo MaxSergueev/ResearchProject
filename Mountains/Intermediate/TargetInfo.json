@@ -1,0 +1,14 @@
+{
+	"Targets": [
+		{
+			"Name": "Mountains",
+			"Path": "..\\Source\\Mountains.Target.cs",
+			"Type": "Game"
+		},
+		{
+			"Name": "MountainsEditor",
+			"Path": "..\\Source\\MountainsEditor.Target.cs",
+			"Type": "Editor"
+		}
+	]
+}

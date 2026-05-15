@@ -1,0 +1,14 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "c:\\users\\maxse\\documents\\unreal projects\\mountains\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\mountains\\permoduleinline.gen.cpp",
+        "ProvidedModule": "",
+        "PCH": "c:\\users\\maxse\\documents\\unreal projects\\mountains\\intermediate\\build\\win64\\x64\\mountainseditor\\development\\unrealed\\sharedpch.unrealed.project.valapi.cpp20.h.pch",
+        "Includes": [
+            "c:\\users\\maxse\\documents\\unreal projects\\mountains\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\mountains\\definitions.mountains.h",
+            "c:\\program files\\epic games\\ue_5.5\\engine\\source\\runtime\\core\\public\\hal\\permoduleinline.inl"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}
