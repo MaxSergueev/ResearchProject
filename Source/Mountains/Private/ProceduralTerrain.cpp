@@ -13,6 +13,10 @@ void AProceduralTerrain::BeginPlay()
     CreateTerrainGeometry();
 }
 
+float AProceduralTerrain::Hash2D(FVector2D p) {
+    return FMath::Frac(FMath::Sin(FVector2D::DotProduct(p, FVector2D(127.1f, 311.7f))) * 43758.5453123f);
+}
+
 void AProceduralTerrain::CreateTerrainGeometry()
 {
     CustomMesh->ClearAllMeshSections();
@@ -24,31 +28,34 @@ void AProceduralTerrain::CreateTerrainGeometry()
     TArray<FColor> VertexColors;
     TArray<FProcMeshTangent> Tangents;
 
-    // Generate Vertices and UVs
+    // Generate vertices and UVs
     for (int32 y = 0; y < GridSize; y++)
     {
         for (int32 x = 0; x < GridSize; x++)
         {
             float VertexX = x * GridSpacing;
             float VertexY = y * GridSpacing;
+            FVector2D ScaledSampleCoords = FVector2D(VertexX, VertexY) * 0.0002f;
 
-            float TotalHeight = 0.0f;
+            float AccumulatedHeight = 0.0f;
+            float Amplitude = 1.0f;
             FVector2D DerivativeSum = FVector2D(0.0f, 0.0f);
-            float Amplitude = 1200.0f;
-            FVector2D ScaledSampleCoords = FVector2D(x, y) * 0.05f;
 
-            // 6-Octave Fractal Brownian Motion with Derivative Feedback
-            for (int32 Octave = 0; Octave < 6; Octave++)
+            for (int32 Octave = 0; Octave < 10; Octave++)
             {
                 FVector3f NoiseResult = ValueNoiseWithDerivatives(ScaledSampleCoords);
+
                 DerivativeSum += FVector2D(NoiseResult.Y, NoiseResult.Z);
+                AccumulatedHeight += Amplitude * NoiseResult.X / (1.0f + FVector2D::DotProduct(DerivativeSum, DerivativeSum));
 
-                // IQ's Formula
-                TotalHeight += Amplitude * NoiseResult.X / (1.0f + FVector2D::DotProduct(DerivativeSum, DerivativeSum));
-
-                ScaledSampleCoords *= 2.01f;
                 Amplitude *= 0.5f;
+
+                float RotatedX = (0.8f * ScaledSampleCoords.X + 0.6f * ScaledSampleCoords.Y) * 2.0f;
+                float RotatedY = (-0.6f * ScaledSampleCoords.X + 0.8f * ScaledSampleCoords.Y) * 2.0f;
+                ScaledSampleCoords = FVector2D(RotatedX, RotatedY);
             }
+
+            float TotalHeight = AccumulatedHeight * 4500.0f;
 
             Vertices.Add(FVector(VertexX, VertexY, TotalHeight));
             UV0.Add(FVector2D((float)x / (GridSize - 1), (float)y / (GridSize - 1)));
@@ -58,7 +65,7 @@ void AProceduralTerrain::CreateTerrainGeometry()
         }
     }
 
-    // Calculate grid normals and slope-based colors
+    // Calculate normals using the Numerical/Finite Difference method
     for (int32 y = 0; y < GridSize; y++)
     {
         for (int32 x = 0; x < GridSize; x++)
@@ -73,6 +80,7 @@ void AProceduralTerrain::CreateTerrainGeometry()
             float StepX = (x > 0 && x < GridSize - 1) ? (2.0f * GridSpacing) : GridSpacing;
             float StepY = (y > 0 && y < GridSize - 1) ? (2.0f * GridSpacing) : GridSpacing;
 
+            // Numerical/Finite Difference: estimate surface tangents from neighbor heights
             FVector TangentX = FVector(StepX, 0.0f, Vertices[RightIdx].Z - Vertices[LeftIdx].Z);
             FVector TangentY = FVector(0.0f, StepY, Vertices[UpIdx].Z - Vertices[DownIdx].Z);
 
@@ -111,24 +119,18 @@ void AProceduralTerrain::CreateTerrainGeometry()
     CustomMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UV0, VertexColors, Tangents, true);
 }
 
-// 2D hash function for noise
-float Hash2D(FVector2D p) {
-    return FMath::Frac(FMath::Sin(FVector2D::DotProduct(p, FVector2D(127.1, 311.7))) * 43758.5453123);
-}
-
 FVector3f AProceduralTerrain::ValueNoiseWithDerivatives(FVector2D p)
 {
     FVector2D i = FVector2D(FMath::FloorToFloat(p.X), FMath::FloorToFloat(p.Y));
     FVector2D f = FVector2D(FMath::Frac(p.X), FMath::Frac(p.Y));
 
-    // Quintic Hermite interpolation curve
     FVector2D u = f * f * f * (f * (f * 6.0f - 15.0f) + 10.0f);
-    FVector2D du = 30.0f * f * f * (f * (f * 2.0f - 3.0f) + 1.0f);
+    FVector2D du = 30.0f * f * f * (f * (f - 2.0f) + 1.0f);
 
-    float a = Hash2D(i + FVector2D(0.0, 0.0));
-    float b = Hash2D(i + FVector2D(1.0, 0.0));
-    float c = Hash2D(i + FVector2D(0.0, 1.0));
-    float d = Hash2D(i + FVector2D(1.0, 1.0));
+    float a = Hash2D(i + FVector2D(0.0f, 0.0f));
+    float b = Hash2D(i + FVector2D(1.0f, 0.0f));
+    float c = Hash2D(i + FVector2D(0.0f, 1.0f));
+    float d = Hash2D(i + FVector2D(1.0f, 1.0f));
 
     float Height = a + (b - a) * u.X + (c - a) * u.Y + (a - b - c + d) * u.X * u.Y;
 

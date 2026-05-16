@@ -20,8 +20,10 @@ protected:
         UProceduralMeshComponent* CustomMesh;
 
     // Configuration Variables
-    int32 GridSize = 500;     // Number of vertices on X and Y axes
-    float GridSpacing = 100.f; // Distance between vertices
+    int32 GridSize = 800;     // Number of vertices on X and Y axes
+    float GridSpacing = 50.f; // Distance between vertices
+
+    float Hash2D(FVector2D p);
 
     // Returns height (x) and derivatives (y=dx, z=dy) - IQ blog ref
     FVector3f ValueNoiseWithDerivatives(FVector2D p);
