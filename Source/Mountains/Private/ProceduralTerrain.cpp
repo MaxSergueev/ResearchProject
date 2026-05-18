@@ -6,6 +6,17 @@ AProceduralTerrain::AProceduralTerrain()
     PrimaryActorTick.bCanEverTick = false;
     CustomMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("CustomMesh"));
     RootComponent = CustomMesh;
+
+    // Distinct values for the two biomes
+    PlainsBiome.GlobalHeightScale = 1200.0f;
+    PlainsBiome.CoordinateScale = 0.0001f;
+    PlainsBiome.GrassColor = FLinearColor(0.12f, 0.4f, 0.12f);
+    PlainsBiome.RockColor = FLinearColor(0.25f, 0.2f, 0.15f);
+
+    MountainBiome.GlobalHeightScale = 7500.0f;
+    MountainBiome.CoordinateScale = 0.0003f;
+    MountainBiome.GrassColor = FLinearColor(0.05f, 0.2f, 0.08f);
+    MountainBiome.RockColor = FLinearColor(0.12f, 0.12f, 0.14f);
 }
 
 void AProceduralTerrain::BeginPlay()
@@ -24,6 +35,57 @@ float AProceduralTerrain::Hash2D(FVector2D p) {
     return FMath::Frac(FMath::Sin(FVector2D::DotProduct(p, FVector2D(127.1f, 311.7f))) * 43758.5453123f);
 }
 
+FVector3f AProceduralTerrain::ValueNoiseWithDerivatives(FVector2D p)
+{
+    FVector2D i = FVector2D(FMath::FloorToFloat(p.X), FMath::FloorToFloat(p.Y));
+    FVector2D f = FVector2D(FMath::Frac(p.X), FMath::Frac(p.Y));
+
+    FVector2D u = f * f * f * (f * (f * 6.0f - 15.0f) + 10.0f);
+    FVector2D du = 30.0f * f * f * (f * (f - 2.0f) + 1.0f);
+
+    float a = Hash2D(i + FVector2D(0.0f, 0.0f));
+    float b = Hash2D(i + FVector2D(1.0f, 0.0f));
+    float c = Hash2D(i + FVector2D(0.0f, 1.0f));
+    float d = Hash2D(i + FVector2D(1.0f, 1.0f));
+
+    float Height = a + (b - a) * u.X + (c - a) * u.Y + (a - b - c + d) * u.X * u.Y;
+
+    float dx = du.X * (b - a + (a - b - c + d) * u.Y);
+    float dy = du.Y * (c - a + (a - b - c + d) * u.X);
+
+    return FVector3f(Height, dx, dy);
+}
+
+float AProceduralTerrain::CalculateBiomeHeight(FVector2D BaseCoords, const FBiomeSettings& Biome)
+{
+    FVector2D ScaledSampleCoords = BaseCoords * Biome.CoordinateScale;
+    float AccumulatedHeight = 0.0f;
+    float Amplitude = 1.0f;
+    FVector2D DerivativeSum = FVector2D(0.0f, 0.0f);
+
+    for (int32 Octave = 0; Octave < Biome.Octaves; Octave++)
+    {
+        FVector2D WarpedCoords = ScaledSampleCoords + DerivativeSum * Biome.WarpStrength;
+        FVector3f NoiseResult = ValueNoiseWithDerivatives(WarpedCoords);
+
+        float RidgeShape = 1.0f - FMath::Abs(NoiseResult.X);
+        RidgeShape = FMath::Max(0.0f, RidgeShape - Biome.SharpnessOffset);
+        RidgeShape = RidgeShape * RidgeShape;
+
+        float SlopeDenom = 1.0f + FVector2D::DotProduct(DerivativeSum, DerivativeSum);
+        AccumulatedHeight += Amplitude * RidgeShape / SlopeDenom;
+
+        DerivativeSum += FVector2D(NoiseResult.Y, NoiseResult.Z);
+        Amplitude *= Biome.AmplitudeDecay;
+
+        float RotatedX = (0.8f * ScaledSampleCoords.X + 0.6f * ScaledSampleCoords.Y) * 2.1f;
+        float RotatedY = (-0.6f * ScaledSampleCoords.X + 0.8f * ScaledSampleCoords.Y) * 2.1f;
+        ScaledSampleCoords = FVector2D(RotatedX, RotatedY);
+    }
+
+    return AccumulatedHeight * Biome.GlobalHeightScale;
+}
+
 void AProceduralTerrain::CreateTerrainGeometry()
 {
     CustomMesh->ClearAllMeshSections();
@@ -31,7 +93,6 @@ void AProceduralTerrain::CreateTerrainGeometry()
     int32 TotalVertices = GridSize * GridSize;
     int32 TotalTriangles = (GridSize - 1) * (GridSize - 1) * 6;
 
-    // Cache the full actor transform safely on the game thread before going async
     FTransform ActorTransform = GetActorTransform();
 
     // --- STEP 1: PRE-ALLOCATE MEMORY ---
@@ -54,8 +115,6 @@ void AProceduralTerrain::CreateTerrainGeometry()
             FVector2D SampleCoords;
             if (bUseWorldLocationOffset)
             {
-                // Transforms local vertex XY into its exact, absolute world position
-                // This completely accounts for Actor Scale, Rotation, and Translation automatically.
                 FVector WorldPos = ActorTransform.TransformPosition(FVector(VertexX, VertexY, 0.0f));
                 SampleCoords = FVector2D(WorldPos.X, WorldPos.Y);
             }
@@ -64,42 +123,21 @@ void AProceduralTerrain::CreateTerrainGeometry()
                 SampleCoords = FVector2D(VertexX + GlobalNoiseOffset.X, VertexY + GlobalNoiseOffset.Y);
             }
 
-            FVector2D ScaledSampleCoords = SampleCoords * CoordinateScale;
+            // Sample global biome map noise (returns 0.0 to 1.0 based on Hash2D's Frac)
+            float BiomeNoise = ValueNoiseWithDerivatives(SampleCoords * BiomeScale).X;
+            float BiomeWeight = FMath::SmoothStep(0.35f, 0.65f, BiomeNoise);
 
-            float AccumulatedHeight = 0.0f;
-            float Amplitude = 1.0f;
-            FVector2D DerivativeSum = FVector2D(0.0f, 0.0f);
+            // Calculate heights per biome and blend
+            float PlainsHeight = CalculateBiomeHeight(SampleCoords, PlainsBiome);
+            float MountainHeight = CalculateBiomeHeight(SampleCoords, MountainBiome);
+            float FinalHeight = FMath::Lerp(PlainsHeight, MountainHeight, BiomeWeight);
 
-            for (int32 Octave = 0; Octave < Octaves; Octave++)
-            {
-                FVector2D WarpedCoords = ScaledSampleCoords + DerivativeSum * WarpStrength;
-                FVector3f NoiseResult = ValueNoiseWithDerivatives(WarpedCoords);
-
-                // Calculate the absolute ridge shape [0.0, 1.0]
-                float RidgeShape = 1.0f - FMath::Abs(NoiseResult.X);
-
-                RidgeShape = FMath::Max(0.0f, RidgeShape - SharpnessOffset);
-                RidgeShape = RidgeShape * RidgeShape;
-
-                float SlopeDenom = 1.0f + FVector2D::DotProduct(DerivativeSum, DerivativeSum);
-                AccumulatedHeight += Amplitude * RidgeShape / SlopeDenom;
-
-                DerivativeSum += FVector2D(NoiseResult.Y, NoiseResult.Z);
-                Amplitude *= AmplitudeDecay;
-
-                float RotatedX = (0.8f * ScaledSampleCoords.X + 0.6f * ScaledSampleCoords.Y) * 2.1f;
-                float RotatedY = (-0.6f * ScaledSampleCoords.X + 0.8f * ScaledSampleCoords.Y) * 2.1f;
-                ScaledSampleCoords = FVector2D(RotatedX, RotatedY);
-            }
-
-            float TotalHeight = AccumulatedHeight * GlobalHeightScale;
-
-            Vertices[Index] = FVector(VertexX, VertexY, TotalHeight);
+            Vertices[Index] = FVector(VertexX, VertexY, FinalHeight);
             UV0[Index] = FVector2D((float)x / (GridSize - 1), (float)y / (GridSize - 1));
         });
 
     // --- STEP 3: PARALLEL NORMALS & COLORS CALCULATION ---
-    ParallelFor(TotalVertices, [this, &Vertices, &Normals, &VertexColors](int32 Index)
+    ParallelFor(TotalVertices, [this, &Vertices, &Normals, &VertexColors, ActorTransform](int32 Index)
         {
             int32 y = Index / GridSize;
             int32 x = Index % GridSize;
@@ -118,14 +156,33 @@ void AProceduralTerrain::CreateTerrainGeometry()
             FVector CalculatedNormal = FVector::CrossProduct(TangentX, TangentY).GetSafeNormal();
             Normals[Index] = CalculatedNormal;
 
+            // Recompute Biome Weight for this vertex's world position to blend colors accurately
+            float VertexX = x * GridSpacing;
+            float VertexY = y * GridSpacing;
+            FVector2D SampleCoords;
+            if (bUseWorldLocationOffset)
+            {
+                FVector WorldPos = ActorTransform.TransformPosition(FVector(VertexX, VertexY, 0.0f));
+                SampleCoords = FVector2D(WorldPos.X, WorldPos.Y);
+            }
+            else
+            {
+                SampleCoords = FVector2D(VertexX + GlobalNoiseOffset.X, VertexY + GlobalNoiseOffset.Y);
+            }
+
+            float BiomeNoise = ValueNoiseWithDerivatives(SampleCoords * BiomeScale).X;
+            float BiomeWeight = FMath::SmoothStep(0.35f, 0.65f, BiomeNoise);
+
+            // Interpolate biome colors dynamically
+            FLinearColor BiomeGrass = FMath::Lerp(PlainsBiome.GrassColor, MountainBiome.GrassColor, BiomeWeight);
+            FLinearColor BiomeRock = FMath::Lerp(PlainsBiome.RockColor, MountainBiome.RockColor, BiomeWeight);
+
+            // Calculate slope-based rock vs grass blending
             float SlopeIntensity = FVector::DotProduct(CalculatedNormal, FVector::UpVector);
-            float BlendFactor = FMath::Clamp((SlopeIntensity - 0.6f) / 0.2f, 0.0f, 1.0f);
+            float SlopeFactor = FMath::Clamp((SlopeIntensity - 0.6f) / 0.2f, 0.0f, 1.0f);
 
-            FLinearColor RockColor = FLinearColor(0.15f, 0.15f, 0.15f);
-            FLinearColor GrassColor = FLinearColor(0.1f, 0.35f, 0.1f);
-            FLinearColor FinalColor = FMath::Lerp(RockColor, GrassColor, BlendFactor);
-
-            VertexColors[Index] = FinalColor.ToFColor(true);
+            FLinearColor FinalColor = FMath::Lerp(BiomeRock, BiomeGrass, SlopeFactor);
+            VertexColors[Index] = FinalColor.ToFColor(false);
         });
 
     // --- STEP 4: INDEX TRIANGLES SEQUENTIALLY ---
@@ -149,25 +206,4 @@ void AProceduralTerrain::CreateTerrainGeometry()
 
     // --- STEP 5: BAKE MESH SECTION ---
     CustomMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UV0, VertexColors, Tangents, true);
-}
-
-FVector3f AProceduralTerrain::ValueNoiseWithDerivatives(FVector2D p)
-{
-    FVector2D i = FVector2D(FMath::FloorToFloat(p.X), FMath::FloorToFloat(p.Y));
-    FVector2D f = FVector2D(FMath::Frac(p.X), FMath::Frac(p.Y));
-
-    FVector2D u = f * f * f * (f * (f * 6.0f - 15.0f) + 10.0f);
-    FVector2D du = 30.0f * f * f * (f * (f - 2.0f) + 1.0f);
-
-    float a = Hash2D(i + FVector2D(0.0f, 0.0f));
-    float b = Hash2D(i + FVector2D(1.0f, 0.0f));
-    float c = Hash2D(i + FVector2D(0.0f, 1.0f));
-    float d = Hash2D(i + FVector2D(1.0f, 1.0f));
-
-    float Height = a + (b - a) * u.X + (c - a) * u.Y + (a - b - c + d) * u.X * u.Y;
-
-    float dx = du.X * (b - a + (a - b - c + d) * u.Y);
-    float dy = du.Y * (c - a + (a - b - c + d) * u.X);
-
-    return FVector3f(Height, dx, dy);
 }
