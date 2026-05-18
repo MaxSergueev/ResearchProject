@@ -1,4 +1,5 @@
 #include "ProceduralTerrain.h"
+#include "Async/ParallelFor.h"
 
 AProceduralTerrain::AProceduralTerrain()
 {
@@ -13,6 +14,12 @@ void AProceduralTerrain::BeginPlay()
     CreateTerrainGeometry();
 }
 
+void AProceduralTerrain::OnConstruction(const FTransform& Transform)
+{
+    Super::OnConstruction(Transform);
+    CreateTerrainGeometry();
+}
+
 float AProceduralTerrain::Hash2D(FVector2D p) {
     return FMath::Frac(FMath::Sin(FVector2D::DotProduct(p, FVector2D(127.1f, 311.7f))) * 43758.5453123f);
 }
@@ -21,56 +28,64 @@ void AProceduralTerrain::CreateTerrainGeometry()
 {
     CustomMesh->ClearAllMeshSections();
 
-    TArray<FVector> Vertices;
-    TArray<int32> Triangles;
-    TArray<FVector> Normals;
-    TArray<FVector2D> UV0;
-    TArray<FColor> VertexColors;
+    int32 TotalVertices = GridSize * GridSize;
+    int32 TotalTriangles = (GridSize - 1) * (GridSize - 1) * 6;
+
+    // --- STEP 1: PRE-ALLOCATE MEMORY ---
+    TArray<FVector> Vertices;     Vertices.SetNumUninitialized(TotalVertices);
+    TArray<FVector2D> UV0;        UV0.SetNumUninitialized(TotalVertices);
+    TArray<FVector> Normals;      Normals.SetNumUninitialized(TotalVertices);
+    TArray<FColor> VertexColors;  VertexColors.SetNumUninitialized(TotalVertices);
+    TArray<int32> Triangles;      Triangles.SetNumUninitialized(TotalTriangles);
     TArray<FProcMeshTangent> Tangents;
 
-    // Generate vertices and UVs
-    for (int32 y = 0; y < GridSize; y++)
-    {
-        for (int32 x = 0; x < GridSize; x++)
+    // --- STEP 2: PARALLEL VERTEX & HEIGHT GENERATION ---
+    ParallelFor(TotalVertices, [this, &Vertices, &UV0](int32 Index)
         {
+            int32 y = Index / GridSize;
+            int32 x = Index % GridSize;
+
             float VertexX = x * GridSpacing;
             float VertexY = y * GridSpacing;
-            FVector2D ScaledSampleCoords = FVector2D(VertexX, VertexY) * 0.0002f;
+            FVector2D ScaledSampleCoords = FVector2D(VertexX, VertexY) * CoordinateScale;
 
             float AccumulatedHeight = 0.0f;
             float Amplitude = 1.0f;
             FVector2D DerivativeSum = FVector2D(0.0f, 0.0f);
 
-            for (int32 Octave = 0; Octave < 10; Octave++)
+            for (int32 Octave = 0; Octave < Octaves; Octave++)
             {
-                FVector3f NoiseResult = ValueNoiseWithDerivatives(ScaledSampleCoords);
+                FVector2D WarpedCoords = ScaledSampleCoords + DerivativeSum * WarpStrength;
+                FVector3f NoiseResult = ValueNoiseWithDerivatives(WarpedCoords);
+
+                // Calculate the absolute ridge shape [0.0, 1.0]
+                float RidgeShape = 1.0f - FMath::Abs(NoiseResult.X);
+
+                RidgeShape = FMath::Max(0.0f, RidgeShape - SharpnessOffset);
+                RidgeShape = RidgeShape * RidgeShape;
+
+                float SlopeDenom = 1.0f + FVector2D::DotProduct(DerivativeSum, DerivativeSum);
+                AccumulatedHeight += Amplitude * RidgeShape / SlopeDenom;
 
                 DerivativeSum += FVector2D(NoiseResult.Y, NoiseResult.Z);
-                AccumulatedHeight += Amplitude * NoiseResult.X / (1.0f + FVector2D::DotProduct(DerivativeSum, DerivativeSum));
+                Amplitude *= AmplitudeDecay;
 
-                Amplitude *= 0.5f;
-
-                float RotatedX = (0.8f * ScaledSampleCoords.X + 0.6f * ScaledSampleCoords.Y) * 2.0f;
-                float RotatedY = (-0.6f * ScaledSampleCoords.X + 0.8f * ScaledSampleCoords.Y) * 2.0f;
+                float RotatedX = (0.8f * ScaledSampleCoords.X + 0.6f * ScaledSampleCoords.Y) * 2.1f;
+                float RotatedY = (-0.6f * ScaledSampleCoords.X + 0.8f * ScaledSampleCoords.Y) * 2.1f;
                 ScaledSampleCoords = FVector2D(RotatedX, RotatedY);
             }
 
-            float TotalHeight = AccumulatedHeight * 4500.0f;
+            float TotalHeight = AccumulatedHeight * GlobalHeightScale;
 
-            Vertices.Add(FVector(VertexX, VertexY, TotalHeight));
-            UV0.Add(FVector2D((float)x / (GridSize - 1), (float)y / (GridSize - 1)));
+            Vertices[Index] = FVector(VertexX, VertexY, TotalHeight);
+            UV0[Index] = FVector2D((float)x / (GridSize - 1), (float)y / (GridSize - 1));
+        });
 
-            Normals.Add(FVector::UpVector);
-            VertexColors.Add(FColor::Black);
-        }
-    }
-
-    // Calculate normals using the Numerical/Finite Difference method
-    for (int32 y = 0; y < GridSize; y++)
-    {
-        for (int32 x = 0; x < GridSize; x++)
+    // --- STEP 3: PARALLEL NORMALS & COLORS CALCULATION ---
+    ParallelFor(TotalVertices, [this, &Vertices, &Normals, &VertexColors](int32 Index)
         {
-            int32 Index = x + (y * GridSize);
+            int32 y = Index / GridSize;
+            int32 x = Index % GridSize;
 
             int32 LeftIdx = (x > 0) ? (Index - 1) : Index;
             int32 RightIdx = (x < GridSize - 1) ? (Index + 1) : Index;
@@ -80,7 +95,6 @@ void AProceduralTerrain::CreateTerrainGeometry()
             float StepX = (x > 0 && x < GridSize - 1) ? (2.0f * GridSpacing) : GridSpacing;
             float StepY = (y > 0 && y < GridSize - 1) ? (2.0f * GridSpacing) : GridSpacing;
 
-            // Numerical/Finite Difference: estimate surface tangents from neighbor heights
             FVector TangentX = FVector(StepX, 0.0f, Vertices[RightIdx].Z - Vertices[LeftIdx].Z);
             FVector TangentY = FVector(0.0f, StepY, Vertices[UpIdx].Z - Vertices[DownIdx].Z);
 
@@ -95,10 +109,10 @@ void AProceduralTerrain::CreateTerrainGeometry()
             FLinearColor FinalColor = FMath::Lerp(RockColor, GrassColor, BlendFactor);
 
             VertexColors[Index] = FinalColor.ToFColor(true);
-        }
-    }
+        });
 
-    // Generate triangles
+    // --- STEP 4: INDEX TRIANGLES SEQUENTIALLY ---
+    int32 TriIdx = 0;
     for (int32 y = 0; y < GridSize - 1; y++)
     {
         for (int32 x = 0; x < GridSize - 1; x++)
@@ -106,16 +120,17 @@ void AProceduralTerrain::CreateTerrainGeometry()
             int32 Row1 = x + (y * GridSize);
             int32 Row2 = x + ((y + 1) * GridSize);
 
-            Triangles.Add(Row1);
-            Triangles.Add(Row2);
-            Triangles.Add(Row1 + 1);
+            Triangles[TriIdx++] = Row1;
+            Triangles[TriIdx++] = Row2;
+            Triangles[TriIdx++] = Row1 + 1;
 
-            Triangles.Add(Row1 + 1);
-            Triangles.Add(Row2);
-            Triangles.Add(Row2 + 1);
+            Triangles[TriIdx++] = Row1 + 1;
+            Triangles[TriIdx++] = Row2;
+            Triangles[TriIdx++] = Row2 + 1;
         }
     }
 
+    // --- STEP 5: BAKE MESH SECTION ---
     CustomMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UV0, VertexColors, Tangents, true);
 }
 
