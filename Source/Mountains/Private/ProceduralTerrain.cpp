@@ -31,6 +31,9 @@ void AProceduralTerrain::CreateTerrainGeometry()
     int32 TotalVertices = GridSize * GridSize;
     int32 TotalTriangles = (GridSize - 1) * (GridSize - 1) * 6;
 
+    // Cache the full actor transform safely on the game thread before going async
+    FTransform ActorTransform = GetActorTransform();
+
     // --- STEP 1: PRE-ALLOCATE MEMORY ---
     TArray<FVector> Vertices;     Vertices.SetNumUninitialized(TotalVertices);
     TArray<FVector2D> UV0;        UV0.SetNumUninitialized(TotalVertices);
@@ -40,14 +43,28 @@ void AProceduralTerrain::CreateTerrainGeometry()
     TArray<FProcMeshTangent> Tangents;
 
     // --- STEP 2: PARALLEL VERTEX & HEIGHT GENERATION ---
-    ParallelFor(TotalVertices, [this, &Vertices, &UV0](int32 Index)
+    ParallelFor(TotalVertices, [this, &Vertices, &UV0, ActorTransform](int32 Index)
         {
             int32 y = Index / GridSize;
             int32 x = Index % GridSize;
 
             float VertexX = x * GridSpacing;
             float VertexY = y * GridSpacing;
-            FVector2D ScaledSampleCoords = FVector2D(VertexX, VertexY) * CoordinateScale;
+
+            FVector2D SampleCoords;
+            if (bUseWorldLocationOffset)
+            {
+                // Transforms local vertex XY into its exact, absolute world position
+                // This completely accounts for Actor Scale, Rotation, and Translation automatically.
+                FVector WorldPos = ActorTransform.TransformPosition(FVector(VertexX, VertexY, 0.0f));
+                SampleCoords = FVector2D(WorldPos.X, WorldPos.Y);
+            }
+            else
+            {
+                SampleCoords = FVector2D(VertexX + GlobalNoiseOffset.X, VertexY + GlobalNoiseOffset.Y);
+            }
+
+            FVector2D ScaledSampleCoords = SampleCoords * CoordinateScale;
 
             float AccumulatedHeight = 0.0f;
             float Amplitude = 1.0f;

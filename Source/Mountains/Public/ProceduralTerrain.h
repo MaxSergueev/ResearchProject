@@ -19,7 +19,7 @@ protected:
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Terrain")
     UProceduralMeshComponent* CustomMesh;
-    
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain | Grid Setup", meta = (UIMin = "50", UIMax = "1000", ClampMin = "2", ClampMax = "2000"))
     int32 GridSize = 400;
 
@@ -28,6 +28,12 @@ protected:
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain | Grid Setup", meta = (UIMin = "1000", UIMax = "15000"))
     float GlobalHeightScale = 5500.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain | Coordinate Offset")
+    bool bUseWorldLocationOffset = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain | Coordinate Offset", meta = (EditCondition = "!bUseWorldLocationOffset"))
+    FVector2D GlobalNoiseOffset = FVector2D(0.0f, 0.0f);
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain | Noise Settings", meta = (UIMin = "0.00005", UIMax = "0.001"))
     float CoordinateScale = 0.0002f;
