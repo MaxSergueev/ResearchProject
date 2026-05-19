@@ -206,4 +206,10 @@ void AProceduralTerrain::CreateTerrainGeometry()
 
     // --- STEP 5: BAKE MESH SECTION ---
     CustomMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UV0, VertexColors, Tangents, true);
+
+    // --- STEP 6: APPLY MATERIAL ---
+    if (TerrainMaterial != nullptr)
+    {
+        CustomMesh->SetMaterial(0, TerrainMaterial);
+    }
 }

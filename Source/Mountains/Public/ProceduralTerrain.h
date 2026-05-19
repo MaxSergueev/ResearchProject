@@ -71,6 +71,9 @@ protected:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain | Biomes", meta = (UIMin = "0.000001", UIMax = "0.0001"))
     float BiomeScale = 0.00002f;
 
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain | Material")
+    UMaterialInterface* TerrainMaterial;
+
     float Hash2D(FVector2D p);
     FVector3f ValueNoiseWithDerivatives(FVector2D p);
     float CalculateBiomeHeight(FVector2D BaseCoords, const FBiomeSettings& Biome);
