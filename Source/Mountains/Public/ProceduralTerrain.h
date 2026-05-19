@@ -77,5 +77,7 @@ protected:
     float Hash2D(FVector2D p);
     FVector3f ValueNoiseWithDerivatives(FVector2D p);
     float CalculateBiomeHeight(FVector2D BaseCoords, const FBiomeSettings& Biome);
+
+    // Dispatches either synchronous (Editor) or asynchronous (Runtime) geometry generation
     void CreateTerrainGeometry();
 };
