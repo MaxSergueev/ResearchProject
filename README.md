@@ -11,7 +11,7 @@
 
 ## Introduction
 
-In computer graphics, there are two primary methods of rendering: offline and real-time. While offline renders can take time to render each frame in intricate detail, 
+In computer graphics, there are two primary methods of rendering: offline and real-time. While offline renders can take time to create each frame in intricate detail, 
 real-time solutions are expected to produce convincing scenes at 60 frames per second while competing for computational resources with physics and gameplay systems. 
 This project aims to explore mountain and terrain generation in Unreal Engine 5, leveraging C++ thread pooling, chunk streaming and derivative-driven value noise. 
 This research evaluates the viability of creating highly detailed, distinct biomes entirely on the CPU, and later identifying structural bottlenecks that can be resolved
@@ -22,15 +22,15 @@ with a modern GPU hybrid pipeline.
 ## State of The Art
 
 Procedural terrain generation in real-time games has generally landed on a common architecture: a chunked infinite world where terrain is generated on demand as the player moves.
-Minecraft's world generation system is a great example of this. Terrain is produced in 16x16x384 column chunks, generated asynchronously and loaded into the scene through a queue that 
-is drained a bounded number of chunks per tick - a direct inspiration for my `TerrainChunkManager`. Its older biome system assigned distinct height and feature parameters to regions of the world,
-blending smoothly at the borders, which motivated the two-biome smoothstep approach used in this project.
+Minecraft's world generation system is a widely known example of this. Terrain is produced in 16x16x384 column chunks, generated asynchronously and loaded into the scene through a queue that 
+is drained a bounded number of chunks per tick, which directly inspired my `TerrainChunkManager`. Minecraft's older biome system assigned distinct height and feature parameters to regions of the world that would blend smoothly at the borders, which motivated the two-biome smoothstep approach used in this project.
 
 The standard noise for procedural terrain is Perlin Noise, which assigns gradient vectors to grid points and interpolates between them. 
 Unlike Perlin noise, value noise uses simpler scalar values, making it faster to compute the exact derivatives simply by taking the differential of the polynomial used for interpolation.
 Ken Perlin's improved noise formulation established a quintic polynomial $6x^5 - 15x^4 + 10x^3$ whose continuous second derivative enables unbroken slope vectors when differentiated 
-(see *Figure 1*). Inigo Quilez formalized this observation in his article More Noise, showing that the exact dx and dy can be extracted without additional sampling of neighboring points.
-This article was the main inspiration for this project, I wanted to apply what I learned from it to an Unreal 5 project.
+(see *Figure 1*). Inigo Quilez formalized this observation in his article More Noise, showing that the exact dx and dy can be extracted without additional sampling of neighboring points by deriving the polynomial used to interpolate between the grid points.
+This article was the main inspiration for this project, initially encountered through Josh's Channel's video on procedural mountain techniques.
+I wanted to apply what I learned from it to an Unreal Engine 5 project.
 
 <img width="690" height="433" alt="noise-discontinuity2" src="https://github.com/user-attachments/assets/e3d917aa-c2a0-4fc4-b6ea-fa0a1ecc824e" />
 
@@ -40,7 +40,7 @@ This article was the main inspiration for this project, I wanted to apply what I
 
 ## Approach
 
-Value noise was chosen over Perlin noise because as previously mentioned, its analytical derivatives are a direct product of the quintic interpolation step. 
+Value noise was chosen over Perlin noise because its analytical derivatives are a direct product of the quintic interpolation step. 
 The function `ValueNoiseWithDerivatives()` computes the interpolation weights *u* and their derivatives *du* simultaneously, returning height, dx, and dy in a single pass.
 
 These derivatives drive the fBm loop in `CalculateBiomeHeight()` in two ways:
@@ -54,8 +54,8 @@ These derivatives drive the fBm loop in `CalculateBiomeHeight()` in two ways:
 
   > *Figure 2: Demonstration of warping by changing the WarpStrength variable in editor.*
   
-- **Slope-based amplitude suppression** divides each octave's contribution by one plus the squared magnitude of the derivative sum, much like how sediment does not stick to
-  steep surfaces and settles at flat ground.
+- **Slope-based amplitude suppression** divides each octave's contribution by one plus the squared magnitude of the derivative sum, mimicking how sediment does not stick to
+  steep surfaces and settles on flat ground.
   ```cpp
   float SlopeDenom = 1.0f + FVector2D::DotProduct(DerivativeSum, DerivativeSum);
   AccumulatedHeight += Amplitude * RidgeShape / SlopeDenom;
@@ -65,7 +65,7 @@ These derivatives drive the fBm loop in `CalculateBiomeHeight()` in two ways:
   > *Figure 3: Demonstration of Slopes being less affected by changes to the Amplitude Decay variable, done in editor.*
 
 Additionally, **ridge shaping** (inverting and squaring the noise) can help produce the sharp peaks of younger mountains rather than the smooth tops of hills or very old mountains.
-The resulting mountains after the above described processes can be seen below in *Figure 5*.
+The resulting mountains from the process described above can be seen below in *Figure 5*.
   ```cpp
   float RidgeShape = 1.0f - FMath::Abs(NoiseResult.X);
   RidgeShape = FMath::Max(0.0f, RidgeShape - Biome.SharpnessOffset);
@@ -75,7 +75,7 @@ The resulting mountains after the above described processes can be seen below in
 
 > *Figure 4: Demonstration of how the ridge shape and height changes with the SharpnessOffset variable, done in editor.*
 
-The system also currently has two biomes (see cover image) which can be easily extended. They are blended using a smoothstep-filtered noise value as a spatial weight. 
+The system currently has two implemented biomes (see cover image) which can be easily extended. They are blended using a smoothstep-filtered noise value as a spatial weight. 
 `ATerrainChunkManager` tracks the player position each tick, and queues new chunks that are now in range to spawn. It uses the variable `MaxChunksSpawnedPerFrame` to spread the load of
 spawning new chunks across multiple ticks. Heavy mesh generation is offloaded to the Unreal thread pool asynchronously and only the final mesh upload runs on the game thread.
 
@@ -108,7 +108,7 @@ The final vertex height is determined by linear interpolation when blending the 
 FinalHeight = Lerp(PlainsHeight, MountainHeight, BiomeWeight)
 ```
 
-Each of `PlainsHeight` and `MountainHeight` is the output of a multi octave fBm loop in which:
+Each of `PlainsHeight` and `MountainHeight` is the output of a multi-octave fBm loop in which:
 
 - The input coordinates are warped each octave by the running derivative sum, creating a recursive dependency between octaves.
 - The noise output is ridge-shaped via a non-linear operation (invert, clip, square) that introduces regions of non-differentiability.
@@ -116,22 +116,25 @@ Each of `PlainsHeight` and `MountainHeight` is the output of a multi octave fBm 
 
 In addition, `BiomeWeight` is also an independently-evaluated, smoothstep-filtered noise value.
 
-Propagating analytical derivatives through this composite would require applying the full chain rule across all nested operations, and be reimplemented if the height noise function was changed.
+Propagating analytical derivatives through this composite would require applying the full chain rule across all nested operations, and would need to be re-derived entirely if the height noise function were to change.
+
+This problem with the normals came from a flawed assumption about how the reference, Inigo Quilez's More Noise article, would apply to my context. I did not initially take into account the difference between a raymarched terrain vs. a discrete grid of vertices and tried to directly apply what I had learned from Inigo Quilez to a fundamentally mismatched system. This led me to the solution described above. However, for even better results there are some potential future improvements.
 
 ---
 
 ## Future Approaches
 
 - **Decoupled Normal Map:** Generate a separate, high resolution normal pass evaluating the height function on a denser grid than the vertex grid used to construct the mesh.
-  Then sampling this normal map in a material. This decouples visual normal resolution from the mesh polygon count.
-- **Hybrid GPU Compute Pipeline:** Height generation is an incredibly parallel problem, each vertex is independent of all other vertices.
-  A GPU compute shader could process the same data magnitudes faster, at larger grid scales and more octave layers. We can calculate the macro shapes of the terrain on the CPU for the collision,
-  and offload the high-frequency micro detail to the GPU.
+  This normal map could then be sampled in a material. This decouples visual normal resolution from the mesh polygon count.
+- **Hybrid GPU Compute Pipeline:** Height generation is an embarrassingly parallel problem as each vertex is independent of all other vertices.
+  A GPU compute shader could process the same data orders of magnitude faster, at larger grid scales and more octave layers. Macro shapes of the terrain could be computed on the CPU for the collision,
+  and the high-frequency micro detail can be offloaded to the GPU.
 
 ---
 
 ## Bibliography
 
+- Josh's Channel. (2024, April 1). *Better Mountain Generators That Aren't Perlin Noise or Erosion*. YouTube. https://www.youtube.com/watch?v=gsJHzBTPG0Y
 - Quilez, I. (n.d.). *More Noise*. https://iquilezles.org/articles/morenoise/
 - Vivo, P. G., & Lowe, J. (2015). *The Book of Shaders, Chapter 13*. https://thebookofshaders.com/13/
 - Scratchapixel. (n.d.). *Improved Perlin Noise*. https://www.scratchapixel.com/lessons/procedural-generation-virtual-worlds/perlin-noise-part-2/improved-perlin-noise.html
